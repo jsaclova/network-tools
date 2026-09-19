@@ -1,0 +1,157 @@
+#!/bin/bash
+
+# 1. 고정 폴더 경로 및 로그 폴더 생성
+BASE_DIR="$HOME/bin/network-tools"
+LOG_DIR="$BASE_DIR/log"
+mkdir -p "$LOG_DIR"
+
+# 2. 날짜별 파일명 생성 (형식: scan_년-월-일_시분초.txt)
+CURRENT_TIME=$(date "+%Y-%m-%d_%H%M%S")
+RESULT_FILE="$LOG_DIR/scan_${CURRENT_TIME}.txt"
+
+# nmap 설치 여부 확인 함수
+check_nmap() {
+    if ! command -v nmap &> /dev/null; then
+        echo "============================================================"
+        echo " ❌ 오류: nmap 도구가 설치되어 있지 않습니다."
+        echo " 💡 해결 방법: 아래 명령어로 설치 후 다시 실행하세요:"
+        echo "    brew install nmap"
+        echo "============================================================"
+        exit 1
+    fi
+}
+
+# [기능 1] 특정 IP 1개 단독 체크 및 주요 포트 스캔 함수
+check_specific_ip() {
+    TARGET_IP="$1"
+    echo "============================================================"
+    echo "          특정 IP 상태 및 주요 포트 정보 확인"
+    echo "============================================================"
+    echo " 🔍 대상 IP: $TARGET_IP 상태 확인 중..."
+    echo "------------------------------------------------------------"
+    
+    # nmap으로 해당 IP가 살아있는지 검사 (-sn: ping만 체크)
+    PING_CHECK=$(nmap -sn "$TARGET_IP" | grep "Host is up")
+    
+    if [ -z "$PING_CHECK" ]; then
+        echo "  🔴 [비활성화] 현재 이 IP는 응답이 없습니다. (Dead)"
+        echo "============================================================"
+        return
+    fi
+    
+    echo "  🟢 [활성화] 현재 이 IP는 사용 중입니다. (Alive)"
+    echo " ⏳ 주요 10대 포트 스캔을 시작합니다..."
+    echo "------------------------------------------------------------"
+    echo "  포트번호   상태       서비스 이름"
+    echo "------------------------------------------------------------"
+    
+    # 주요 10대 포트 지정 스캔 (-p 옵션 뒤에 포트 나열)
+    # --open 옵션으로 열려있는 포트만 출력할 수도 있지만, 닫힌 포트 가시성을 위해 전체 분석
+    nmap -p 21,22,23,25,53,80,443,445,3389,8080 "$TARGET_IP" | grep -E "^[0-9]+/(tcp|udp)" | while read -r line; do
+        PORT_NUM=$(echo "$line" | awk '{print $1}')
+        STATUS=$(echo "$line" | awk '{print $2}')
+        SERVICE=$(echo "$line" | awk '{print $3}')
+        
+        # 상태에 따라 가독성 좋은 이모지 추가
+        if [ "$STATUS" == "open" ]; then
+            printf "   %-10s 🟢 %-10s %s\n" "$PORT_NUM" "$STATUS" "$SERVICE"
+        else
+            printf "   %-10s ⚪️ %-10s %s\n" "$PORT_NUM" "$STATUS" "$SERVICE"
+        fi
+    done
+    echo "============================================================"
+}
+
+# [기능 2] 전체 네트워크를 스캔하는 기존 함수
+scan_full_network() {
+    INTERFACE=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2}')
+    if [ -z "$INTERFACE" ]; then
+        echo "============================================================"
+        echo " ❌ 오류: 활성화된 네트워크 연결을 찾을 수 없습니다."
+        echo "============================================================"
+        exit 1
+    fi
+
+    IP=$(ifconfig "$INTERFACE" | awk '/inet / {print $2}')
+    HEX_MASK=$(ifconfig "$INTERFACE" | awk '/inet / {print $4}')
+
+    if [ -z "$IP" ] || [ -z "$HEX_MASK" ]; then
+        echo "============================================================"
+        echo " ❌ 오류: 인터페이스($INTERFACE)에서 IP 정보를 읽을 수 없습니다."
+        echo "============================================================"
+        exit 1
+    fi
+
+    HEX_VAL=${HEX_MASK#0x}
+    DEC_MASK="$((16#${HEX_VAL:0:2})).$((16#${HEX_VAL:2:2})).$((16#${HEX_VAL:4:2})).$((16#${HEX_VAL:6:2}))"
+    
+    CIDR=0
+    for octet in $(echo "$DEC_MASK" | tr '.' ' '); do
+        case $octet in
+            255) CIDR=$((CIDR + 8)) ;;
+            254) CIDR=$((CIDR + 7)) ;;
+            252) CIDR=$((CIDR + 6)) ;;
+            248) CIDR=$((CIDR + 5)) ;;
+            240) CIDR=$((CIDR + 4)) ;;
+            224) CIDR=$((CIDR + 3)) ;;
+            192) CIDR=$((CIDR + 2)) ;;
+            128) CIDR=$((CIDR + 1)) ;;
+        esac
+    done
+
+    IFS='.' read -r i1 i2 i3 i4 <<< "$IP"
+    if [ "$CIDR" -eq 24 ]; then
+        SUBNET="$i1.$i2.$i3.0/$CIDR"
+    elif [ "$CIDR" -eq 16 ]; then
+        SUBNET="$i1.$i2.0.0/$CIDR"
+    else
+        SUBNET="$IP/$CIDR"
+    fi
+
+    echo "============================================================"
+    echo "               동일 네트워크 범용 IP 스캔"
+    echo "============================================================"
+    echo " 스캔 일시   : $(date '+%Y-%m-%d %H:%M:%S')"
+    echo " 내 장치 정보 : $INTERFACE ($IP)"
+    echo " 감지된 대역  : $SUBNET"
+    echo "------------------------------------------------------------"
+    echo " 🔍 현재 연결된 기기들을 찾고 있습니다..."
+    echo "    (네트워크 크기에 따라 수초~십수초 소요)"
+    echo "------------------------------------------------------------"
+
+    IP_LIST=$(nmap -sn "$SUBNET" | grep "Nmap scan report for" | awk '{print $NF}' | tr -d '()' | sort -V)
+
+    if [ -z "$IP_LIST" ]; then
+        echo " 연결된 기기를 찾지 못했습니다."
+    else
+        echo "$IP_LIST" | while read -r ip; do
+            if [ "$ip" == "$IP" ]; then
+                echo "  👉 활성 IP: $ip (내 맥💻)"
+            else
+                echo "  👉 활성 IP: $ip"
+            fi
+        done
+        
+        TOTAL_COUNT=$(echo "$IP_LIST" | wc -l | tr -d ' ')
+        echo "------------------------------------------------------------"
+        echo " ✨ 스캔 완료! 총 ${TOTAL_COUNT}개의 장치가 활성화되어 있습니다."
+        echo " 💾 결과가 다음 경로에 저장되었습니다:"
+        echo "    $RESULT_FILE"
+    fi
+    echo "============================================================"
+}
+
+# 오래된 로그 파일(7일 경과) 자동 삭제 함수
+clean_old_logs() {
+    find "$LOG_DIR" -name "scan_*.txt" -type f -mtime +6 -delete
+}
+
+# --- 메인 실행 로직 ---
+check_nmap
+
+if [ ! -z "$1" ]; then
+    check_specific_ip "$1"
+else
+    scan_full_network | tee "$RESULT_FILE"
+    clean_old_logs
+fi

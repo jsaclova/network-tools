@@ -1,0 +1,49 @@
+#!/bin/bash
+
+# 1. 활성화된 내부 네트워크 인터페이스 찾기
+INTERFACE=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2}')
+
+if [ -z "$INTERFACE" ]; then
+    echo "========================================"
+    echo " 오류: 활성화된 네트워크 연결을 찾을 수 없습니다."
+    echo "========================================"
+    exit 1
+fi
+
+# 2. 내부 IP 및 16진수 마스크 추출
+INTERNAL_IP=$(ifconfig "$INTERFACE" | awk '/inet / {print $2}')
+HEX_MASK=$(ifconfig "$INTERFACE" | awk '/inet / {print $4}')
+
+# 3. 16진수 마스크를 10진수(255.255.255.0) 형태로 변환
+if [ ! -z "$HEX_MASK" ]; then
+    HEX_VAL=${HEX_MASK#0x}
+    DEC_MASK="$((16#${HEX_VAL:0:2})).$((16#${HEX_VAL:2:2})).$((16#${HEX_VAL:4:2})).$((16#${HEX_VAL:6:2}))"
+else
+    DEC_MASK="N/A"
+fi
+
+# 4. 게이트웨이 및 DNS 추출
+GATEWAY=$(route -n get default 2>/dev/null | awk '/gateway:/ {print $2}')
+DNS=$(scutil --dns 2>/dev/null | awk '/nameserver\[[0-9]\]/ {print $3}' | sort -u | tr '\n' ' ')
+
+# 5. 실제 외부로 나가는 공인 IP(Public IP) 조회 (3초 타임아웃 설정)
+PUBLIC_IP=$(curl -s --max-time 3 ifconfig.me)
+if [ -z "$PUBLIC_IP" ]; then
+    PUBLIC_IP=$(curl -s --max-time 3 icanhazip.com)
+fi
+if [ -z "$PUBLIC_IP" ]; then
+    PUBLIC_IP="연결 실패 (인터넷 오프라인)"
+fi
+
+# 6. 결과 출력
+echo "========================================"
+echo "          현재 네트워크 정보"
+echo "========================================"
+echo " 인터페이스   : $INTERFACE"
+echo " 내부 IP 주소 : $INTERNAL_IP"
+echo " 서브넷마스크 : $DEC_MASK"
+echo " 게이트웨이   : $GATEWAY"
+echo " 네임서버(DNS): $DNS"
+echo "----------------------------------------"
+echo " 실제 공인 IP : $PUBLIC_IP"
+echo "========================================"
