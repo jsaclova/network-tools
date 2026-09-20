@@ -74,18 +74,18 @@ printf "  %-18s | %-16s | %-16s\n" "대상 장비 IP" "업로드(Sender)" "다�
 echo "------------------------------------------------------------"
 
 echo "$ACTIVE_SERVERS" | while read -r target; do
-    # -f m 옵션으로 단위를 Mbits/sec(Mbps)로 지정하여 측정
-    RAW_RESULT=$(iperf3 -c "$target" -t 3 -f m 2>&1)
+    # [패치 1] --connect-timeout 2 옵션을 주어 응답 없는 유령 장비는 2초 만에 스킵하도록 제어합니다.
+    RAW_RESULT=$(iperf3 -c "$target" -t 3 -f m --connect-timeout 2 2>&1)
     
-    if echo "$RAW_RESULT" | grep -q "error"; then
-        printf "  %-18s | %-37s\n" "$target" "❌ 연결 실패 (방화벽 등 확인)"
+    if echo "$RAW_RESULT" | grep -q -E "error|unable|timeout"; then
+        printf "  %-18s | %-37s\n" "$target" "❌ 연결 실패 (타임아웃/방화벽)"
     else
-        # 단위를 Mbits에서 Mbps 문구로 교체하여 정제
-        SENDER=$(echo "$RAW_RESULT" | grep "sender" | awk '{print $(bits+6) " Mbps"}')
-        RECEIVER=$(echo "$RAW_RESULT" | grep "receiver" | awk '{print $(bits+6) " Mbps"}')
+        # [패치 2] 맥 환경 및 iperf3 버전에 상관없이 텍스트 위치를 유연하게 파싱하도록 수정
+        SENDER=$(echo "$RAW_RESULT" | grep "sender" | awk '{for(i=1;i<=NF;i++) if($i=="Mbits/sec") print $(i-1) " Mbps"}')
+        RECEIVER=$(echo "$RAW_RESULT" | grep "receiver" | awk '/receiver/ {for(i=1;i<=NF;i++) if($i=="Mbits/sec") print $(i-1) " Mbps"}')
         
-        [ -z "$SENDER" ] || [ "$SENDER" == " Mbps" ] && SENDER="N/A"
-        [ -z "$RECEIVER" ] || [ "$RECEIVER" == " Mbps" ] && RECEIVER="N/A"
+        [ -z "$SENDER" ] && SENDER="N/A"
+        [ -z "$RECEIVER" ] && RECEIVER="N/A"
         
         printf "  %-18s | %-16s | %-16s\n" "$target" "$SENDER" "$RECEIVER"
     fi
