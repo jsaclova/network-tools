@@ -70,16 +70,16 @@ fi
 # 4. 발견된 장비들과 순차적으로 속도 테스트 진행
 echo " 🎉 속도 측정이 가능한 장비를 발견했습니다!"
 echo "------------------------------------------------------------"
-# 가로 세로 칸막이 글자 폭 레이아웃 일치화 패치
 printf "  %-16s | %-16s | %-16s\n" "대상 장비 IP" "업로드(Sender)" "다운로드(Receiver)"
 echo "------------------------------------------------------------"
 
 echo "$ACTIVE_SERVERS" | while read -r target; do
-    RAW_RESULT=$(iperf3 -c "$target" -t 3 -f m --connect-timeout 2 2>&1)
+    # [버그 픽스] 제어 메시지 전송 시간 확보를 위해 타임아웃을 4초로 변경합니다.
+    RAW_RESULT=$(iperf3 -c "$target" -t 3 -f m --connect-timeout 4 2>&1)
     
-    if echo "$RAW_RESULT" | grep -q -E "error|unable|timeout"; then
-        # 실패 메시지 출력 시에도 가로 세로 칸막이(|) 라인이 흐트러지지 않도록 가변 공백 처리
-        printf "  %-16s | %-37s\n" "$target" "❌ 연결 실패 (타임아웃/방화벽)"
+    # [버그 픽스] Socket 관련 에러 문구까지 포괄적으로 감지하도록 조건문 보완
+    if echo "$RAW_RESULT" | grep -q -E "error|unable|timeout|Socket|not connected"; then
+        printf "  %-16s | %-37s\n" "$target" "❌ 연결 실패 (타임아웃/방화벽/소켓)"
     else
         SENDER=$(echo "$RAW_RESULT" | grep "sender" | awk '{for(i=1;i<=NF;i++) if($i=="Mbits/sec") print $(i-1) " Mbps"}')
         RECEIVER=$(echo "$RAW_RESULT" | grep "receiver" | awk '/receiver/ {for(i=1;i<=NF;i++) if($i=="Mbits/sec") print $(i-1) " Mbps"}')
