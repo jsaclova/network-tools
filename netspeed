@@ -17,12 +17,11 @@ fi
 WIFI_DEV=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{grep=1; next} grep && /Device:/{print $2; grep=0}')
 WIFI_SERVICE=$(networksetup -listallnetworkservices 2>/dev/null | grep -E "Wi-Fi|Wi-Fi 1|Wi-Fi 2" | head -n 1)
 
-# 활성화된 유선 이더넷 서비스 찾기
 ETHER_SERVICE=""
 ETHER_SERVICES=$(networksetup -listallnetworkservices 2>/dev/null | grep -E "Ethernet|LAN|Thunderbolt|USB")
 for service in $ETHER_SERVICES; do
     dev=$(networksetup -listallhardwareports 2>/dev/null | xargs -I {} networksetup -listnetworkserviceorder | grep -A 1 "$service" | grep "Device:" | awk '{print $2}')
-    if [ ! -z "$dev" ] && ifconfig "$dev" 2>/dev/null | grep -q "status: active"; then
+    if [ ! -z "$dev" ] && ifconfig "$dev" 2>/dev/null | grep "status:" | grep -q "active"; then
         ETHER_SERVICE="$service"
         ETHER_DEV="$dev"
         break
@@ -45,18 +44,24 @@ case "$CHOICE" in
             exit 1
         fi
         
-        echo " ⏳ 유선 이더넷 ($ETHER_DEV) 속도 측정 중..."
-        
-        # 와이파이가 켜져 있다면 잠시 끄기 (라우팅 충돌 방지)
+        echo " ⏳ 유선 이더넷 ($ETHER_DEV) 인터넷 연결 상태 진단 중..."
         WIFI_WAS_ON=0
         if [ ! -z "$WIFI_DEV" ] && networksetup -getairportpower "$WIFI_DEV" 2>/dev/null | grep -q "On"; then
             WIFI_WAS_ON=1
             networksetup -setairportpower "$WIFI_DEV" off &>/dev/null
+            sleep 1
         fi
         
-        RESULT=$(speedtest-cli --simple 2>/dev/null)
+        # 외부 인터넷 통신 상태 사전 체크 (구글 DNS 대상 핑 1회 전송)
+        if ! ping -c 1 -W 1500 8.8.8.8 &>/dev/null; then
+            echo " 🔴 경고: 유선 LAN 연결은 되어있으나 인터넷이 정상 작동하지 않습니다."
+            echo "          (공유기 모뎀선 또는 회사 망 제한을 확인하세요)"
+            echo "------------------------------------------------------------"
+        fi
         
-        # 원복
+        echo " ⏳ 유선 이더넷 ($ETHER_DEV) 속도 측정 중... (약 15초 소요)"
+        RESULT=$(speedtest-cli --simple --timeout 15 2>/dev/null)
+        
         if [ "$WIFI_WAS_ON" -eq 1 ]; then
             networksetup -setairportpower "$WIFI_DEV" on &>/dev/null
         fi
@@ -70,27 +75,33 @@ case "$CHOICE" in
             exit 1
         fi
         
-        if ! ifconfig "$WIFI_DEV" 2>/dev/null | grep -q "status: active"; then
+        if ! ifconfig "$WIFI_DEV" 2>/dev/null | grep "status:" | grep -q "active"; then
             echo " ❌ 오류: Wi-Fi가 꺼져있거나 와이파이 공유기에 연결되지 않았습니다."
             echo "============================================================"
             exit 1
         fi
         
-        echo " ⏳ 무선 와이파이 ($WIFI_DEV) 속도 측정 중..."
-        
-        # [핵심 패치] 유선 이더넷이 연결되어 있다면 잠시 비활성화하여 와이파이 경로를 강제 독점합니다.
+        echo " ⏳ 무선 와이파이 ($WIFI_DEV) 인터넷 연결 상태 진단 중..."
         ETHER_WAS_ACTIVE=0
         if [ ! -z "$ETHER_SERVICE" ]; then
             ETHER_WAS_ACTIVE=1
-            # sudo 없이 특정 네트워크 서비스를 잠시 내리는 맥 전용 명령어
             networksetup -setnetworkserviceenabled "$ETHER_SERVICE" off &>/dev/null
-            # 잠시 라우팅이 새로고침될 수 있도록 1초 대기
-            sleep 1
+            sleep 1.5
         fi
         
-        RESULT=$(speedtest-cli --simple 2>/dev/null)
+        # 와이파이의 순수 외부 인터넷 작동 여부 검증
+        INTERNET_OK=1
+        if ! ping -c 1 -W 2000 8.8.8.8 &>/dev/null; then
+            INTERNET_OK=0
+            echo " ⚠️  진단 결과: 현재 연결된 Wi-Fi는 외부 인터넷이 터지지 않습니다!"
+            echo "     (와이파이 안테나는 떠있으나 내부망 신호만 살아있는 상태입니다)"
+            echo "------------------------------------------------------------"
+        fi
         
-        # [핵심 원복] 측정이 끝나면 유선 이더넷 서비스를 즉시 다시 활성화합니다.
+        echo " ⏳ 무선 와이파이 ($WIFI_DEV) 속도 측정 중... (약 15초 소요)"
+        # 타임아웃 세션을 15초로 늘려 느린 망에서도 서버 매칭 확률 극대화
+        RESULT=$(speedtest-cli --simple --timeout 15 2>/dev/null)
+        
         if [ "$ETHER_WAS_ACTIVE" -eq 1 ]; then
             networksetup -setnetworkserviceenabled "$ETHER_SERVICE" on &>/dev/null
         fi
@@ -107,8 +118,11 @@ esac
 # 4. 결과 출력
 echo "------------------------------------------------------------"
 if [ -z "$RESULT" ]; then
-    echo " ❌ 측정 실패: 네트워크 응답이 없거나 테스트 서버에 연결할 수 없습니다."
-    echo " 💡 팁: 현재 선택한 회선으로 실제 인터넷 서핑이 가능한 상태인지 확인해 보세요."
+    echo " ❌ 측정 실패: 외부 속도 측정 서버(Speedtest) 응답 없음"
+    if [ "$CHOICE" -eq 2 ] && [ "$INTERNET_OK" -eq 0 ]; then
+        echo " 💡 해결 가이드: 맥북의 와이파이를 완전히 껐다 켜서 신호를 다시 잡거나,"
+        echo "                인터넷 서핑이 정상 작동하는 다른 Wi-Fi AP에 연결해 보세요."
+    fi
 else
     PING=$(echo "$RESULT" | awk '/Ping:/ {print $2 " " $3}')
     DL=$(echo "$RESULT" | awk '/Download:/ {print $2 " Mbps"}')
