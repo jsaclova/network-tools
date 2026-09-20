@@ -57,10 +57,9 @@ echo " 🔍 현재 네트워크($SUBNET)에서 살아있는 장비 탐색 중...
 echo "    (소켓 보호를 위해 안전 모드로 검색합니다)"
 echo "------------------------------------------------------------"
 
-# [패치] 맥 OS 환경 특성을 고려하여 --system-dns 옵션을 추가하고 resolv.conf 관련 모든 경고 문구(2>/dev/null)를 숨깁니다.
 ALIVE_HOSTS=$(nmap -sn "$SUBNET" --system-dns 2>/dev/null | grep "Nmap scan report for" | awk '{print $NF}' | tr -d '()' | grep -v "^$MY_IP$")
 
-if [ -z "$ALIVE_HOSTS" ]; then
+if [ -z "$ACTIVE_SERVERS" ] && [ -z "$ALIVE_HOSTS" ]; then
     echo " ⚪️ 안내: 현재 네트워크에 연결된 다른 장비를 찾지 못했습니다."
     echo "============================================================"
     exit 0
@@ -72,11 +71,15 @@ printf "  %-16s | %-16s | %-16s\n" "대상 장비 IP" "업로드(Sender)" "다�
 echo "------------------------------------------------------------"
 
 echo "$ALIVE_HOSTS" | while read -r target; do
-    RAW_RESULT=$(iperf3 -c "$target" -t 3 -f m --connect-timeout 2 2>&1)
+    # 서버 응답 대기 시간을 최소화하기 위해 타임아웃은 1초로 타이트하게 지정
+    RAW_RESULT=$(iperf3 -c "$target" -t 3 -f m --connect-timeout 1 2>&1)
     
-    if echo "$RAW_RESULT" | grep -q -E "error|unable|timeout|Socket|not connected|refused"; then
-        if echo "$RAW_RESULT" | grep -q -E "Socket|not connected|timeout"; then
-            printf "  %-16s | %-37s\n" "$target" "❌ 연결 실패 (소켓/타임아웃)"
+    # [인쇄 변경] 연결 거부(refused)되거나 포트가 닫혀있는 일반 장비도 이제 표에 실패 사유를 무조건 출력합니다.
+    if echo "$RAW_RESULT" | grep -q -E "error|unable|timeout|Socket|not connected|refused|Connection refused"; then
+        if echo "$RAW_RESULT" | grep -q -E "refused|Connection refused"; then
+            printf "  %-16s | %-37s\n" "$target" "🔴 iperf3 서버 꺼짐 (Refused)"
+        else
+            printf "  %-16s | %-37s\n" "$target" "❌ 연결 실패 (타임아웃/방화벽)"
         fi
     else
         SENDER=$(echo "$RAW_RESULT" | grep "sender" | awk '{for(i=1;i<=NF;i++) if($i=="Mbits/sec") print $(i-1) " Mbps"}')
