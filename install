@@ -1,0 +1,67 @@
+#!/bin/bash
+
+echo "============================================================"
+echo "          나만의 네트워크 도구 범용 원클릭 설치"
+echo "============================================================"
+
+# 1. 깃허브 저장소 주소 입력받기
+echo " 💡 연결할 깃허브 저장소 주소를 입력해 주세요."
+echo "    (예: git@github.com:jsaclova/network-tools.git)"
+read -p " 🔗 주소 입력: " REPO_URL
+
+if [ -z "$REPO_URL" ]; then
+    echo " ❌ 오류: 주소가 입력되지 않았습니다. 설치를 취소합니다."
+    echo "============================================================"
+    exit 1
+fi
+
+echo "------------------------------------------------------------"
+echo " ⚙️ 설치 및 환경 구성을 시작합니다..."
+echo "------------------------------------------------------------"
+
+# 2. ~/bin 폴더 생성 및 이동
+mkdir -p "$HOME/bin"
+cd "$HOME/bin" || exit 1
+
+# 3. 기존에 동일한 폴더가 있다면 백업 후 삭제 처리
+if [ -d "./network-tools" ]; then
+    echo " ℹ️ 기존 폴더를 발견하여 제거 후 새로 복제합니다."
+    rm -rf "./network-tools"
+fi
+
+# 4. 깃허브에서 소스코드 다운로드 (Clone)
+git clone "$REPO_URL" network-tools
+
+if [ $? -ne 0 ]; then
+    echo " ❌ 오류: 깃허브에서 저장소를 가져오는데 실패했습니다."
+    echo "    SSH 키 등록 여부나 저장소 주소를 다시 확인해 주세요."
+    echo "============================================================"
+    exit 1
+fi
+
+# 5. 터미널 환경 설정(~/.zshrc) 중복 체크 후 환경 변수 및 단축키 추가
+ZSHRC="$HOME/.zshrc"
+
+if ! grep -q "network-tools" "$ZSHRC" 2>/dev/null; then
+    echo 'export PATH="$HOME/bin/network-tools:$PATH"' >> "$ZSHRC"
+    echo " ✅ 시스템 명령어 경로(PATH) 등록 완료"
+else
+    echo " ℹ️ 시스템 경로(PATH)가 이미 존재하여 건너뜁니다."
+fi
+
+if ! grep -q "alias netman=" "$ZSHRC" 2>/dev/null; then
+    echo "alias netman='cat ~/bin/network-tools/manual | less -R'" >> "$ZSHRC"
+    echo " ✅ 매뉴얼 단축키(netman) 등록 완료"
+else
+    echo " ℹ️ 매뉴얼 단축키가 이미 존재하여 건너뜁니다."
+fi
+
+# 6. 스크립트 실행 권한 부여
+chmod +x "$HOME/bin/network-tools/"* 2>/dev/null
+
+echo "------------------------------------------------------------"
+echo " ✨ 모든 도구가 성공적으로 설치되었습니다!"
+echo " 💡 터미널 창을 새로 열거나 아래 명령어를 입력하여 적용하세요:"
+echo "    source ~/.zshrc"
+echo " 💡 설치 후 'netman'을 입력하면 매뉴얼을 볼 수 있습니다."
+echo "============================================================"
