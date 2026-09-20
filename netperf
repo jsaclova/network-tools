@@ -58,7 +58,6 @@ echo "    (잠시만 기다려 주세요)"
 echo "------------------------------------------------------------"
 
 # 3. 네트워크 전체에서 iperf3 포트(5201)가 열려있는 장비 스캔
-# 맥 OS 환경 특성을 고려하여 --system-dns 옵션을 강제 지정하고 에러 출력(2>)은 버립니다.
 ACTIVE_SERVERS=$(nmap -p 5201 "$SUBNET" --open --system-dns 2>/dev/null | grep "Nmap scan report for" | awk '{print $NF}' | tr -d '()' | grep -v "^$MY_IP$")
 
 if [ -z "$ACTIVE_SERVERS" ]; then
@@ -75,16 +74,18 @@ printf "  %-18s | %-16s | %-16s\n" "대상 장비 IP" "업로드(Sender)" "다�
 echo "------------------------------------------------------------"
 
 echo "$ACTIVE_SERVERS" | while read -r target; do
-    RAW_RESULT=$(iperf3 -c "$target" -t 3 -f g 2>&1)
+    # -f m 옵션으로 단위를 Mbits/sec(Mbps)로 지정하여 측정
+    RAW_RESULT=$(iperf3 -c "$target" -t 3 -f m 2>&1)
     
     if echo "$RAW_RESULT" | grep -q "error"; then
         printf "  %-18s | %-37s\n" "$target" "❌ 연결 실패 (방화벽 등 확인)"
     else
-        SENDER=$(echo "$RAW_RESULT" | grep "sender" | awk '{print $(bits+6) " " $(bits+7)}')
-        RECEIVER=$(echo "$RAW_RESULT" | grep "receiver" | awk '{print $(bits+6) " " $(bits+7)}')
+        # 단위를 Mbits에서 Mbps 문구로 교체하여 정제
+        SENDER=$(echo "$RAW_RESULT" | grep "sender" | awk '{print $(bits+6) " Mbps"}')
+        RECEIVER=$(echo "$RAW_RESULT" | grep "receiver" | awk '{print $(bits+6) " Mbps"}')
         
-        [ -z "$SENDER" ] && SENDER="N/A"
-        [ -z "$RECEIVER" ] && RECEIVER="N/A"
+        [ -z "$SENDER" ] || [ "$SENDER" == " Mbps" ] && SENDER="N/A"
+        [ -z "$RECEIVER" ] || [ "$RECEIVER" == " Mbps" ] && RECEIVER="N/A"
         
         printf "  %-18s | %-16s | %-16s\n" "$target" "$SENDER" "$RECEIVER"
     fi
