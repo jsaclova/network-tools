@@ -12,7 +12,7 @@ if ! command -v iperf3 &> /dev/null || ! command -v nmap &> /dev/null; then
     exit 1
 fi
 
-# 2. 내 현재 네트워크 인터페이스 및 IP 정보 자동 감지
+# 2. 현재 활성화된 네트워크 인터페이스 및 IP 정보 자동 감지
 INTERFACE=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2}')
 if [ -z "$INTERFACE" ]; then
     echo " ❌ 오류: 활성화된 네트워크 연결을 찾을 수 없습니다."
@@ -57,9 +57,9 @@ echo " 🔍 현재 네트워크($SUBNET)에서 활성 장비를 탐색 중..."
 echo "    (잠시만 기다려 주세요)"
 echo "------------------------------------------------------------"
 
-# 3. 네트워크 전체에서 살아있고 iperf3 포트(5201)가 열려있는 장비 스캔
-# 내 IP는 대상에서 제외합니다.
-ACTIVE_SERVERS=$(nmap -p 5201 "$SUBNET" --open | grep "Nmap scan report for" | awk '{print $NF}' | tr -d '()' | grep -v "^$MY_IP$")
+# 3. 네트워크 전체에서 iperf3 포트(5201)가 열려있는 장비 스캔
+# 맥 OS 환경 특성을 고려하여 --system-dns 옵션을 강제 지정하고 에러 출력(2>)은 버립니다.
+ACTIVE_SERVERS=$(nmap -p 5201 "$SUBNET" --open --system-dns 2>/dev/null | grep "Nmap scan report for" | awk '{print $NF}' | tr -d '()' | grep -v "^$MY_IP$")
 
 if [ -z "$ACTIVE_SERVERS" ]; then
     echo " ⚪️ 안내: 현재 네트워크에서 'iperf3 -s'가 실행 중인 장비를 찾지 못했습니다."
@@ -75,7 +75,6 @@ printf "  %-18s | %-16s | %-16s\n" "대상 장비 IP" "업로드(Sender)" "다�
 echo "------------------------------------------------------------"
 
 echo "$ACTIVE_SERVERS" | while read -r target; do
-    # 각 장비별로 3초간 짧고 굵게 측정 (대용량 서치 효율화 목적, 단위를 Gbits로 지정)
     RAW_RESULT=$(iperf3 -c "$target" -t 3 -f g 2>&1)
     
     if echo "$RAW_RESULT" | grep -q "error"; then
@@ -84,7 +83,6 @@ echo "$ACTIVE_SERVERS" | while read -r target; do
         SENDER=$(echo "$RAW_RESULT" | grep "sender" | awk '{print $(bits+6) " " $(bits+7)}')
         RECEIVER=$(echo "$RAW_RESULT" | grep "receiver" | awk '{print $(bits+6) " " $(bits+7)}')
         
-        # 값이 비어있을 경우 대비 예외처리
         [ -z "$SENDER" ] && SENDER="N/A"
         [ -z "$RECEIVER" ] && RECEIVER="N/A"
         
