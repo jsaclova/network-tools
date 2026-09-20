@@ -53,34 +53,38 @@ else
     SUBNET="$MY_IP/$CIDR"
 fi
 
-echo " 🔍 현재 네트워크($SUBNET)에서 활성 장비를 탐색 중..."
-echo "    (잠시만 기다려 주세요)"
+echo " 🔍 현재 네트워크($SUBNET)에서 살아있는 장비 탐색 중..."
+echo "    (소켓 보호를 위해 안전 모드로 검색합니다)"
 echo "------------------------------------------------------------"
 
-# 3. 네트워크 전체에서 iperf3 포트(5201)가 열려있는 장비 스캔
-ACTIVE_SERVERS=$(nmap -p 5201 "$SUBNET" --open --system-dns 2>/dev/null | grep "Nmap scan report for" | awk '{print $NF}' | tr -d '()' | grep -v "^$MY_IP$")
+# [핵심 패치] iperf3 서버를 자극하는 -p 5201 포트 스캔을 완전히 제거합니다.
+# 오직 순수 Ping 스캔(-sn)으로 현재 살아있는 장비 리스트만 안전하게 확보합니다.
+ALIVE_HOSTS=$(nmap -sn "$SUBNET" | grep "Nmap scan report for" | awk '{print $NF}' | tr -d '()' | grep -v "^$MY_IP$")
 
-if [ -z "$ACTIVE_SERVERS" ]; then
-    echo " ⚪️ 안내: 현재 네트워크에서 'iperf3 -s'가 실행 중인 장비를 찾지 못했습니다."
-    echo " 👉 측정법: 속도를 측정하고 싶은 다른 PC나 NAS에서 'iperf3 -s'를 켜두세요."
+if [ -z "$ALIVE_HOSTS" ]; then
+    echo " ⚪️ 안내: 현재 네트워크에 연결된 다른 장비를 찾지 못했습니다."
     echo "============================================================"
     exit 0
 fi
 
-# 4. 발견된 장비들과 순차적으로 속도 테스트 진행
-echo " 🎉 속도 측정이 가능한 장비를 발견했습니다!"
+echo " 🎉 속도 측정을 시작합니다..."
 echo "------------------------------------------------------------"
 printf "  %-16s | %-16s | %-16s\n" "대상 장비 IP" "업로드(Sender)" "다운로드(Receiver)"
 echo "------------------------------------------------------------"
 
-echo "$ACTIVE_SERVERS" | while read -r target; do
-    # [버그 픽스] 제어 메시지 전송 시간 확보를 위해 타임아웃을 4초로 변경합니다.
-    RAW_RESULT=$(iperf3 -c "$target" -t 3 -f m --connect-timeout 4 2>&1)
+# 활성 기기들에게만 다이렉트로 iperf3 연결을 시도합니다.
+echo "$ALIVE_HOSTS" | while read -r target; do
+    # 서버 미구동 장비에서 오래 멈추지 않도록 타임아웃은 2초로 안전하게 고정합니다.
+    RAW_RESULT=$(iperf3 -c "$target" -t 3 -f m --connect-timeout 2 2>&1)
     
-    # [버그 픽스] Socket 관련 에러 문구까지 포괄적으로 감지하도록 조건문 보완
-    if echo "$RAW_RESULT" | grep -q -E "error|unable|timeout|Socket|not connected"; then
-        printf "  %-16s | %-37s\n" "$target" "❌ 연결 실패 (타임아웃/방화벽/소켓)"
+    # iperf3 서버가 꺼져있거나 방화벽이 막힌 장비는 표 레이아웃을 깨지 않고 '대기중 아님'으로 매끄럽게 통과합니다.
+    if echo "$RAW_RESULT" | grep -q -E "error|unable|timeout|Socket|not connected|refused"; then
+        # 타 기기들이 켜져있을 때 출력 노이즈를 줄이기 위해, 서버가 확실히 응답한 타임아웃/소켓 에러 외에 단순 거부(refused)는 조용히 넘어가거나 라인을 맞춥니다.
+        if echo "$RAW_RESULT" | grep -q -E "Socket|not connected|timeout"; then
+            printf "  %-16s | %-37s\n" "$target" "❌ 연결 실패 (소켓/타임아웃)"
+        fi
     else
+        # 정상 연결 성공 시 데이터 파싱
         SENDER=$(echo "$RAW_RESULT" | grep "sender" | awk '{for(i=1;i<=NF;i++) if($i=="Mbits/sec") print $(i-1) " Mbps"}')
         RECEIVER=$(echo "$RAW_RESULT" | grep "receiver" | awk '/receiver/ {for(i=1;i<=NF;i++) if($i=="Mbits/sec") print $(i-1) " Mbps"}')
         
