@@ -1,10 +1,10 @@
 #!/bin/bash
 
 echo "============================================================"
-echo "          🚀 유/무선 네트워크 인터넷 속도 비교 측정"
+echo "          🚀 유/무선 네트워크 선택형 인터넷 속도 측정"
 echo "============================================================"
 
-# speedtest-cli 설치 여부 검사
+# 1. speedtest-cli 설치 여부 검사
 if ! command -v speedtest-cli &> /dev/null; then
     echo " ❌ 오류: speedtest-cli 도구가 설치되어 있지 않습니다."
     echo " 💡 해결 방법: 아래 명령어로 설치 후 다시 실행하세요:"
@@ -13,12 +13,12 @@ if ! command -v speedtest-cli &> /dev/null; then
     exit 1
 fi
 
-# 장치명 추출
+# 2. 하드웨어 장치명 추출
 WIFI_DEV=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{grep=1; next} grep && /Device:/{print $2; grep=0}')
 ETHER_DEVS=$(networksetup -listallhardwareports 2>/dev/null | awk '/Ethernet|LAN|Thunderbolt|USB/{grep=1; next} grep && /Device:/{print $2; grep=0}')
 [ -z "$ETHER_DEVS" ] && ETHER_DEVS=$(ifconfig -l | tr ' ' '\n' | grep -E '^en[0-9]+' | grep -v "^$WIFI_DEV$")
 
-# 유선 장치 하나 선택
+# 유선 장치 중 활성화된 것 하나 선택
 ETHER_DEV=""
 for dev in $ETHER_DEVS; do
     if ifconfig "$dev" 2>/dev/null | grep -q "status: active"; then
@@ -27,97 +27,76 @@ for dev in $ETHER_DEVS; do
     fi
 done
 
-# 상태 체크 함수
-get_status() {
-    [ -z "$1" ] && echo "inactive" && return
-    ifconfig "$1" 2>/dev/null | awk '/status:/ {print $2}'
-}
+# 3. 사용자 선택 메뉴 출력
+echo " 📊 측정할 네트워크 장치를 선택해 주세요."
+echo "  [1] 유선 이더넷 (LAN)"
+echo "  [2] 무선 와이파이 (Wi-Fi)"
+echo "------------------------------------------------------------"
+read -p " 👉 번호 입력 (1 또는 2): " CHOICE
+echo "------------------------------------------------------------"
 
-WIFI_STATUS=$(get_status "$WIFI_DEV")
-ETHER_STATUS=$(get_status "$ETHER_DEV")
+TARGET_IF=""
+TARGET_NAME=""
 
-if [ "$WIFI_STATUS" != "active" ] && [ "$ETHER_STATUS" != "active" ]; then
-    echo " ❌ 오류: 활성화된 네트워크(Wi-Fi 또는 이더넷)가 없습니다."
-    echo "============================================================"
-    exit 1
-fi
+case "$CHOICE" in
+    1)
+        TARGET_IF="$ETHER_DEV"
+        TARGET_NAME="유선 이더넷"
+        if [ -z "$TARGET_IF" ] || ! ifconfig "$TARGET_IF" 2>/dev/null | grep -q "status: active"; then
+            echo " ❌ 오류: 현재 연결된 유선 이더넷(LAN) 장치가 없거나 선이 뽑혀 있습니다."
+            echo "============================================================"
+            exit 1
+        fi
+        ;;
+    2)
+        TARGET_IF="$WIFI_DEV"
+        TARGET_NAME="무선 와이파이"
+        if [ -z "$TARGET_IF" ] || ! ifconfig "$TARGET_IF" 2>/dev/null | grep -q "status: active"; then
+            echo " ❌ 오류: 현재 무선 와이파이(Wi-Fi)가 켜져 있지 않거나 연결되지 않았습니다."
+            echo "============================================================"
+            exit 1
+        fi
+        ;;
+    *)
+        echo " ❌ 오류: 잘못된 번호입니다. 1번 또는 2번을 입력해 주세요."
+        echo "============================================================"
+        exit 1
+        ;;
+esac
 
-# 기본 라우팅 백업
+# 4. 기본 라우팅 정보 백업
 ORIG_GW=$(route -n get default 2>/dev/null | awk '/gateway:/ {print $2}')
 ORIG_IF=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2}')
 
-measure_speed() {
-    local iface="$1"
-    local name="$2"
-    
-    echo " ⏳ $name ($iface) 속도 측정 중... (약 15~20초 소요)"
-    
-    # 해당 인터페이스로 라우팅 강제 전환 (측정용 임시 라우팅 추가)
-    sudo route -q change default -interface "$iface" 2>/dev/null
-    
-    # 속도 측정 수행
-    local result=$(speedtest-cli --simple 2>/dev/null)
-    
-    if [ -z "$result" ]; then
-        echo "   ❌ 측정 실패 (네트워크 응답 없음)"
-        eval "${name}_DL='0'"
-        eval "${name}_UL='0'"
-    else
-        local ping=$(echo "$result" | awk '/Ping:/ {print $2 " " $3}')
-        local dl=$(echo "$result" | awk '/Download:/ {print $2}')
-        local ul=$(echo "$result" | awk '/Upload:/ {print $2}')
-        
-        echo "   👉 Ping: $ping / 다운로드: $dl Mbps / 업로드: $ul Mbps"
-        eval "${name}_DL='$dl'"
-        eval "${name}_UL='$ul'"
-    fi
-}
+# 5. 속도 측정 실행
+echo " ⏳ ${TARGET_NAME} (${TARGET_IF}) 속도 측정 중... (약 15~20초 소요)"
 
-# --- 와이파이 측정 ---
-if [ "$WIFI_STATUS" == "active" ]; then
-    measure_speed "$WIFI_DEV" "WiFi"
-else
-    echo " ⚪️ Wi-Fi: 비활성화 상태이므로 측정을 건너뜁니다."
-    WiFi_DL="0" && WiFi_UL="0"
-fi
+# 해당 인터페이스로 라우팅 강제 전환 (측정용 임시 설정)
+sudo route -q change default -interface "$TARGET_IF" 2>/dev/null
 
-echo "------------------------------------------------------------"
+# speedtest 실행
+RESULT=$(speedtest-cli --simple 2>/dev/null)
 
-# --- 이더넷 측정 ---
-if [ "$ETHER_STATUS" == "active" ]; then
-    measure_speed "$ETHER_DEV" "Ethernet"
-else
-    echo " ⚪️ 이더넷: 유선 랜선이 뽑혀있어 측정을 건너뜁니다."
-    Ethernet_DL="0" && Ethernet_UL="0"
-fi
-
-# 라우팅 원래대로 원복 (안전을 위해 필수)
+# 라우팅 원래대로 원복 (인터넷 먹통 방지를 위해 필수 수행)
 if [ ! -z "$ORIG_GW" ]; then
     sudo route -q change default "$ORIG_GW" 2>/dev/null
 else
     sudo route -q change default -interface "$ORIG_IF" 2>/dev/null
 fi
 
-# --- 결과 비교 및 레포트 ---
-echo "============================================================"
-echo "                    📊 최종 속도 비교 결과"
-echo "============================================================"
-printf "  구분      | 다운로드 속도    | 업로드 속도\n"
+# 6. 결과 출력
 echo "------------------------------------------------------------"
-printf "  무선(WiFi) | %-16s | %-16s\n" "${WiFi_DL} Mbps" "${WiFi_UL} Mbps"
-printf "  유선(LAN)  | %-16s | %-16s\n" "${Ethernet_DL} Mbps" "${Ethernet_UL} Mbps"
-echo "------------------------------------------------------------"
-
-# 다운로드 속도 비교 평가
-if (( $(echo "$Ethernet_DL > $WiFi_DL" | bc -l 2>/dev/null || echo 0) )); then
-    DIFF=$(echo "$Ethernet_DL - $WiFi_DL" | bc -l)
-    printf " 💡 유선 이더넷이 무선 와이파이보다 %.2f Mbps 더 빠릅니다.\n" "$DIFF"
-    echo " 📌 안정적인 대용량 다운로드나 게임 시에는 [유선 LAN] 연결을 권장합니다."
-elif (( $(echo "$WiFi_DL > $Ethernet_DL" | bc -l 2>/dev/null || echo 0) )); then
-    DIFF=$(echo "$WiFi_DL - $Ethernet_DL" | bc -l)
-    printf " 💡 무선 와이파이가 유선 이더넷보다 %.2f Mbps 더 빠릅니다.\n" "$DIFF"
-    echo " 📌 현재 유선 인터페이스 환경(대역폭 제한 등)을 점검해 볼 필요가 있습니다."
+if [ -z "$RESULT" ]; then
+    echo " ❌ 측정 실패: 네트워크 응답이 없거나 테스트 서버에 연결할 수 없습니다."
 else
-    echo " 💡 두 네트워크의 속도가 동일하거나 측정값이 없습니다."
+    PING=$(echo "$RESULT" | awk '/Ping:/ {print $2 " " $3}')
+    DL=$(echo "$RESULT" | awk '/Download:/ {print $2 " Mbps"}')
+    UL=$(echo "$RESULT" | awk '/Upload:/ {print $2 " Mbps"}')
+    
+    echo "  📊 [ ${TARGET_NAME} 측정 결과 ]"
+    echo "------------------------------------------------------------"
+    printf "  %-12s : %s\n" "지연 시간(Ping)" "$PING"
+    printf "  %-12s : %s\n" "다운로드 속도" "$DL"
+    printf "  %-12s : %s\n" "업로드 속도" "$UL"
 fi
 echo "============================================================"
