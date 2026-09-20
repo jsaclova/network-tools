@@ -1,0 +1,95 @@
+#!/bin/bash
+
+echo "============================================================"
+echo "       📊 네트워크 내 모든 활성 장비 대상 속도 테스트"
+echo "============================================================"
+
+# 1. 필수 도구 설치 여부 검사
+if ! command -v iperf3 &> /dev/null || ! command -v nmap &> /dev/null; then
+    echo " ❌ 오류: iperf3 또는 nmap 도구가 설치되어 있지 않습니다."
+    echo " 💡 해결 방법: brew install iperf3 nmap 명령어로 설치하세요."
+    echo "============================================================"
+    exit 1
+fi
+
+# 2. 내 현재 네트워크 인터페이스 및 IP 정보 자동 감지
+INTERFACE=$(route -n get default 2>/dev/null | awk '/interface:/ {print $2}')
+if [ -z "$INTERFACE" ]; then
+    echo " ❌ 오류: 활성화된 네트워크 연결을 찾을 수 없습니다."
+    echo "============================================================"
+    exit 1
+fi
+
+MY_IP=$(ifconfig "$INTERFACE" | awk '/inet / {print $2}')
+HEX_MASK=$(ifconfig "$INTERFACE" | awk '/inet / {print $4}')
+
+if [ -z "$MY_IP" ] || [ -z "$HEX_MASK" ]; then
+    echo " ❌ 오류: 내 IP 정보를 읽어올 수 없습니다."
+    echo "============================================================"
+    exit 1
+fi
+
+# 서브넷 대역 계산 (CIDR 비트 추출)
+HEX_VAL=${HEX_MASK#0x}
+DEC_MASK="$((16#${HEX_VAL:0:2})).$((16#${HEX_VAL:2:2})).$((16#${HEX_VAL:4:2})).$((16#${HEX_VAL:6:2}))"
+CIDR=0
+for octet in $(echo "$DEC_MASK" | tr '.' ' '); do
+    case $octet in
+        255) CIDR=$((CIDR + 8)) ;;
+        254) CIDR=$((CIDR + 7)) ;;
+        252) CIDR=$((CIDR + 6)) ;;
+        248) CIDR=$((CIDR + 5)) ;;
+        240) CIDR=$((CIDR + 4)) ;;
+        224) CIDR=$((CIDR + 3)) ;;
+        192) CIDR=$((CIDR + 2)) ;;
+        128) CIDR=$((CIDR + 1)) ;;
+    esac
+done
+
+IFS='.' read -r i1 i2 i3 i4 <<< "$MY_IP"
+if [ "$CIDR" -eq 24 ]; then
+    SUBNET="$i1.$i2.$i3.0/$CIDR"
+else
+    SUBNET="$MY_IP/$CIDR"
+fi
+
+echo " 🔍 현재 네트워크($SUBNET)에서 활성 장비를 탐색 중..."
+echo "    (잠시만 기다려 주세요)"
+echo "------------------------------------------------------------"
+
+# 3. 네트워크 전체에서 살아있고 iperf3 포트(5201)가 열려있는 장비 스캔
+# 내 IP는 대상에서 제외합니다.
+ACTIVE_SERVERS=$(nmap -p 5201 "$SUBNET" --open | grep "Nmap scan report for" | awk '{print $NF}' | tr -d '()' | grep -v "^$MY_IP$")
+
+if [ -z "$ACTIVE_SERVERS" ]; then
+    echo " ⚪️ 안내: 현재 네트워크에서 'iperf3 -s'가 실행 중인 장비를 찾지 못했습니다."
+    echo " 👉 측정법: 속도를 측정하고 싶은 다른 PC나 NAS에서 'iperf3 -s'를 켜두세요."
+    echo "============================================================"
+    exit 0
+fi
+
+# 4. 발견된 장비들과 순차적으로 속도 테스트 진행
+echo " 🎉 속도 측정이 가능한 장비를 발견했습니다!"
+echo "------------------------------------------------------------"
+printf "  %-18s | %-16s | %-16s\n" "대상 장비 IP" "업로드(Sender)" "다운로드(Receiver)"
+echo "------------------------------------------------------------"
+
+echo "$ACTIVE_SERVERS" | while read -r target; do
+    # 각 장비별로 3초간 짧고 굵게 측정 (대용량 서치 효율화 목적, 단위를 Gbits로 지정)
+    RAW_RESULT=$(iperf3 -c "$target" -t 3 -f g 2>&1)
+    
+    if echo "$RAW_RESULT" | grep -q "error"; then
+        printf "  %-18s | %-37s\n" "$target" "❌ 연결 실패 (방화벽 등 확인)"
+    else
+        SENDER=$(echo "$RAW_RESULT" | grep "sender" | awk '{print $(bits+6) " " $(bits+7)}')
+        RECEIVER=$(echo "$RAW_RESULT" | grep "receiver" | awk '{print $(bits+6) " " $(bits+7)}')
+        
+        # 값이 비어있을 경우 대비 예외처리
+        [ -z "$SENDER" ] && SENDER="N/A"
+        [ -z "$RECEIVER" ] && RECEIVER="N/A"
+        
+        printf "  %-18s | %-16s | %-16s\n" "$target" "$SENDER" "$RECEIVER"
+    fi
+done
+
+echo "============================================================"
