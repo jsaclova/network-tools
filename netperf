@@ -70,24 +70,24 @@ fi
 # 4. 발견된 장비들과 순차적으로 속도 테스트 진행
 echo " 🎉 속도 측정이 가능한 장비를 발견했습니다!"
 echo "------------------------------------------------------------"
-printf "  %-18s | %-16s | %-16s\n" "대상 장비 IP" "업로드(Sender)" "다운로드(Receiver)"
+# 가로 세로 칸막이 글자 폭 레이아웃 일치화 패치
+printf "  %-16s | %-16s | %-16s\n" "대상 장비 IP" "업로드(Sender)" "다운로드(Receiver)"
 echo "------------------------------------------------------------"
 
 echo "$ACTIVE_SERVERS" | while read -r target; do
-    # [패치 1] --connect-timeout 2 옵션을 주어 응답 없는 유령 장비는 2초 만에 스킵하도록 제어합니다.
     RAW_RESULT=$(iperf3 -c "$target" -t 3 -f m --connect-timeout 2 2>&1)
     
     if echo "$RAW_RESULT" | grep -q -E "error|unable|timeout"; then
-        printf "  %-18s | %-37s\n" "$target" "❌ 연결 실패 (타임아웃/방화벽)"
+        # 실패 메시지 출력 시에도 가로 세로 칸막이(|) 라인이 흐트러지지 않도록 가변 공백 처리
+        printf "  %-16s | %-37s\n" "$target" "❌ 연결 실패 (타임아웃/방화벽)"
     else
-        # [패치 2] 맥 환경 및 iperf3 버전에 상관없이 텍스트 위치를 유연하게 파싱하도록 수정
         SENDER=$(echo "$RAW_RESULT" | grep "sender" | awk '{for(i=1;i<=NF;i++) if($i=="Mbits/sec") print $(i-1) " Mbps"}')
         RECEIVER=$(echo "$RAW_RESULT" | grep "receiver" | awk '/receiver/ {for(i=1;i<=NF;i++) if($i=="Mbits/sec") print $(i-1) " Mbps"}')
         
         [ -z "$SENDER" ] && SENDER="N/A"
         [ -z "$RECEIVER" ] && RECEIVER="N/A"
         
-        printf "  %-18s | %-16s | %-16s\n" "$target" "$SENDER" "$RECEIVER"
+        printf "  %-16s | %-16s | %-16s\n" "$target" "$SENDER" "$RECEIVER"
     fi
 done
 
