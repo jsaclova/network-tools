@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# 1. 고정 폴더 경로 및 백업 폴더 생성
+BASE_DIR="$HOME/bin/network-tools"
+BACKUP_DIR="$BASE_DIR/backup"
+mkdir -p "$BACKUP_DIR"
+
+# 2. 날짜별 파일명 생성 (형식: network_tools_backup_년-월-일.tar.gz)
+BACKUP_DATE=$(date "+%Y-%m-%d")
+BACKUP_FILE="$BACKUP_DIR/network_tools_backup_${BACKUP_DATE}.tar.gz"
+
+echo "============================================================"
+echo "          📦 나만의 네트워크 도구 최종 통합 백업 시작"
+echo "============================================================"
+echo " 📁 대상 경로 : ~/bin/network-tools/"
+echo " 💾 백업 위치 : ~/bin/network-tools/backup/"
+echo "------------------------------------------------------------"
+
+# 3. 임시 작업 디렉토리 안전하게 생성
+TMP_DIR="$HOME/net_backup_tmp"
+rm -rf "$TMP_DIR"
+mkdir -p "$TMP_DIR/network-tools"
+
+# 4. 누적 로그 및 다른 백업본들을 제외하고 순수 실행 파일 및 매뉴얼만 복사
+cp "$BASE_DIR/netinfo" "$TMP_DIR/network-tools/" 2>/dev/null
+cp "$BASE_DIR/netscan" "$TMP_DIR/network-tools/" 2>/dev/null
+cp "$BASE_DIR/netcheck" "$TMP_DIR/network-tools/" 2>/dev/null
+cp "$BASE_DIR/netbackup" "$TMP_DIR/network-tools/" 2>/dev/null
+cp "$BASE_DIR/nettool_install" "$TMP_DIR/network-tools/" 2>/dev/null
+cp "$BASE_DIR/restore" "$TMP_DIR/network-tools/" 2>/dev/null
+cp "$BASE_DIR/manual" "$TMP_DIR/network-tools/" 2>/dev/null
+
+# 5. .zshrc 내 환경 변수(PATH) 및 단축키(alias) 명세 추출 복사
+grep -E 'network-tools|netman' "$HOME/.zshrc" > "$TMP_DIR/zshrc_setting.txt" 2>/dev/null
+
+# 6. 임시 폴더로 진입하여 압축 수행
+cd "$TMP_DIR" || exit 1
+tar -czf "$BACKUP_FILE" .
+
+# 7. 원래 터미널 디렉토리로 안전 복귀 후 임시 찌꺼기 폴더 파괴 청소
+cd - > /dev/null || exit 1
+rm -rf "$TMP_DIR"
+
+echo " ✨ 백업 완료! 다음 경로에서 압축 파일을 확인하세요:"
+echo "    $BACKUP_FILE"
+echo "============================================================"
