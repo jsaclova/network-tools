@@ -1,0 +1,66 @@
+#!/bin/bash
+
+# 1. 고정 폴더 경로 지정
+BASE_DIR="$HOME/bin/network-tools"
+BACKUP_DIR="$BASE_DIR/backup"
+
+echo "============================================================"
+echo "          🔄 나만의 네트워크 도구 최신본 복원 시작"
+echo "============================================================"
+
+# 2. backup 폴더 존재 여부 및 내부에 파일이 있는지 확인
+if [ ! -d "$BACKUP_DIR" ]; then
+    echo " ❌ 오류: 백업 폴더($BACKUP_DIR)가 존재하지 않습니다."
+    echo "============================================================"
+    exit 1
+fi
+
+# 시간순(최신순)으로 정렬하여 가장 위에 있는 .tar.gz 백업 파일 1개 추출
+LATEST_BACKUP=$(ls -t "$BACKUP_DIR"/network_tools_backup_*.tar.gz 2>/dev/null | head -n 1)
+
+if [ -z "$LATEST_BACKUP" ]; then
+    echo " ❌ 오류: 백업 폴더 안에 복원할 'network_tools_backup_*.tar.gz' 파일이 없습니다."
+    echo " 💡 해결 가이드: 'netbackup'을 먼저 실행하여 백업본을 생성하세요."
+    echo "============================================================"
+    exit 1
+fi
+
+echo " 📦 발견된 가장 최신의 백업본:"
+echo "    $(basename "$LATEST_BACKUP")"
+echo " ⚙️ 복구 공정을 진행하고 있습니다..."
+echo "------------------------------------------------------------"
+
+# 3. 임시 폴더에 압축 해제 후 스크립트 파일들 제자리로 복원 (로그와 백업 폴더는 건드리지 않고 유지)
+TMP_RESTORE="$HOME/net_restore_tmp"
+rm -rf "$TMP_RESTORE"
+mkdir -p "$TMP_RESTORE"
+
+tar -xzf "$LATEST_BACKUP" -C "$TMP_RESTORE"
+
+# 소스 실행 파일들 복사 복원
+cp "$TMP_RESTORE/network-tools/netinfo" "$BASE_DIR/" 2>/dev/null
+cp "$TMP_RESTORE/network-tools/netscan" "$BASE_DIR/" 2>/dev/null
+cp "$TMP_RESTORE/network-tools/netcheck" "$BASE_DIR/" 2>/dev/null
+cp "$TMP_RESTORE/network-tools/netbackup" "$BASE_DIR/" 2>/dev/null
+cp "$TMP_RESTORE/network-tools/nettool_install" "$BASE_DIR/" 2>/dev/null
+cp "$TMP_RESTORE/network-tools/manual" "$BASE_DIR/" 2>/dev/null
+
+# 4. 환경 변수 및 단축키(alias) 명세 복원 처리
+if [ -f "$TMP_RESTORE/zshrc_setting.txt" ]; then
+    if ! grep -q "network-tools" "$HOME/.zshrc" 2>/dev/null; then
+        cat "$TMP_RESTORE/zshrc_setting.txt" >> "$HOME/.zshrc"
+        echo " ✅ 터미널 환경 설정(~/.zshrc) 경로 등록 완료"
+    else
+        echo " ℹ️ 터미널 환경 변수 노선이 이미 유지되고 있어 설정을 보존합니다."
+    fi
+fi
+
+# 5. 모든 실행 파일 권한 재인가 및 찌꺼기 청소
+chmod +x "$BASE_DIR/"* 2>/dev/null
+rm -rf "$TMP_RESTORE"
+
+echo "------------------------------------------------------------"
+echo " ✨ 최신 버전으로의 복원이 완벽하게 완료되었습니다!"
+echo " 💡 새로운 설정을 완전히 새로고침하려면 아래 명령어를 입력하세요:"
+echo "    source ~/.zshrc"
+echo "============================================================"
