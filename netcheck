@@ -4,17 +4,14 @@ echo "============================================================"
 echo "          맥 네트워크 하드웨어 링크 상태 점검"
 echo "============================================================"
 
-# 1. 실제 하드웨어 장치 매핑 정보 가져오기
-# (맥의 networksetup 인터페이스 주문에서 이더넷과 와이파이 장치명을 파싱)
-WIFI_DEV=$(networksetup -listallhardwareports | awk '/Wi-Fi/{grep=1; next} grep && /Device:/{print $2; grep=0}')
-ETHER_DEV=$(networksetup -listallhardwareports | awk '/Ethernet/{grep=1; next} grep && /Device:/{print $2; grep=0}')
+# 1. 와이파이(Wi-Fi) 장치명 정확히 추출
+WIFI_DEV=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{grep=1; next} grep && /Device:/{print $2; grep=0}')
 
-# 2. 와이파이(Wi-Fi) 상태 체크
+# 2. 와이파이 상태 출력
 echo " [무선 네트워크 상태]"
 if [ -z "$WIFI_DEV" ]; then
-    echo "  ⚪️ Wi-Fi 장치: 맥에 Wi-Fi 카드가 인식되지 않았습니다."
+    echo "  ⚪️ Wi-Fi 장치: 맥에 내장 무선 랜카드가 인식되지 않았습니다."
 else
-    # ifconfig에서 status 항목 확인 (active = 선 연결됨 / inactive = 꺼짐 또는 미연결)
     WIFI_STATUS=$(ifconfig "$WIFI_DEV" 2>/dev/null | awk '/status:/ {print $2}')
     WIFI_IP=$(ifconfig "$WIFI_DEV" 2>/dev/null | awk '/inet / {print $2}')
     
@@ -28,24 +25,43 @@ fi
 
 echo "------------------------------------------------------------"
 
-# 3. 이더넷(유선 랜) 상태 체크
+# 3. 이더넷(유선 랜) 상태 체크 (정밀 추적 로직)
 echo " [유선 이더넷 상태]"
-if [ -z "$ETHER_DEV" ]; then
-    # 썬더볼트 독이나 USB-C 허브 랜포트 등 유동적인 이더넷 장치 포괄 검색
-    ETHER_DEV=$(ifconfig -l | tr ' ' '\n' | grep -E 'en[0-9]' | grep -v "$WIFI_DEV" | head -n 1)
+
+# 방법 A: 시스템 하드웨어 포트 중 Ethernet, LAN, Thunderbolt, USB 키워드가 들어간 기기 수집
+ETHER_DEVS=$(networksetup -listallhardwareports 2>/dev/null | awk '/Ethernet|LAN|Thunderbolt|USB/{grep=1; next} grep && /Device:/{print $2; grep=0}')
+
+# 방법 B: 방법 A로 안 잡힐 경우, ifconfig에 등록된 전체 기기 중 와이파이와 루프백을 제외하고 상태(status) 값을 가진 유선 인터페이스 전수 수집
+if [ -z "$ETHER_DEVS" ]; then
+    ETHER_DEVS=$(ifconfig -l | tr ' ' '\n' | grep -E '^en[0-9]+' | grep -v "^$WIFI_DEV$")
 fi
 
-if [ -z "$ETHER_DEV" ]; then
-    echo "  ⚪️ 이더넷 장치: 인식된 유선 랜카드 또는 허브가 없습니다."
-else
-    ETHER_STATUS=$(ifconfig "$ETHER_DEV" 2>/dev/null | awk '/status:/ {print $2}')
-    ETHER_IP=$(ifconfig "$ETHER_DEV" 2>/dev/null | awk '/inet / {print $2}')
+FOUND_ETHERNET=0
+
+for dev in $ETHER_DEVS; do
+    # 해당 장치가 실제 유선 통신선 상태(status) 필드를 출력하는지 확인
+    STATUS_CHECK=$(ifconfig "$dev" 2>/dev/null | grep "status:")
     
-    if [ "$ETHER_STATUS" == "active" ]; then
-        echo "  🟢 이더넷 ($ETHER_DEV): 랜선 연결됨 (Active)"
-        [ ! -z "$ETHER_IP" ] && echo "     👉 할당된 IP : $ETHER_IP"
-    else
-        echo "  🔴 이더넷 ($ETHER_DEV): 랜선 뽑힘 (Inactive / 미연결)"
+    if [ ! -z "$STATUS_CHECK" ]; then
+        FOUND_ETHERNET=1
+        STATUS=$(echo "$STATUS_CHECK" | awk '{print $2}')
+        IP=$(ifconfig "$dev" 2>/dev/null | awk '/inet / {print $2}')
+        
+        # 하드웨어 포트 설명 명칭 가져오기 (예: Belkin USB-C LAN 등)
+        DEV_NAME=$(networksetup -listallhardwareports 2>/dev/null | grep -B 1 "Device: $dev" | head -n 1 | awk -F': ' '{print $2}')
+        [ -z "$DEV_NAME" ] && DEV_NAME="유선 이더넷 장치"
+
+        if [ "$STATUS" == "active" ]; then
+            echo "  🟢 $DEV_NAME ($dev): 랜선 연결됨 (Active)"
+            [ ! -z "$IP" ] && echo "     👉 할당된 IP : $IP"
+        else
+            echo "  🔴 $DEV_NAME ($dev): 랜선 뽑힘 (Inactive / 미연결)"
+        fi
     fi
+done
+
+if [ "$FOUND_ETHERNET" -eq 0 ]; then
+    echo "  ⚪️ 이더넷 장치: 연결된 USB-C 랜젠더, 독(Dock) 또는 유선 랜카드가 없습니다."
 fi
+
 echo "============================================================"
