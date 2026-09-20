@@ -13,16 +13,21 @@ if ! command -v speedtest-cli &> /dev/null; then
     exit 1
 fi
 
-# 2. 하드웨어 서비스 이름 및 상태 추출
-# sudo 없이 안전하게 다루기 위해 맥의 networksetup 서비스 목록을 활용합니다.
-WIFI_SERVICE=$(networksetup -listallnetworkservices 2>/dev/null | grep -E "Wi-Fi|Wi-Fi 1|Wi-Fi 2" | head -n 1)
-ETHER_SERVICE=$(networksetup -listallnetworkservices 2>/dev/null | grep -E "Ethernet|LAN|Thunderbolt|USB LAN" | head -n 1)
-
-# 서비스명이 없을 경우 장치 ID 기반으로 재매핑
+# 2. 하드웨어 서비스 이름 및 장치 ID 파싱
 WIFI_DEV=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{grep=1; next} grep && /Device:/{print $2; grep=0}')
-if [ -z "$WIFI_SERVICE" ] && [ ! -z "$WIFI_DEV" ]; then
-    WIFI_SERVICE=$(networksetup -listallnetworkservices 2>/dev/null | xargs -I {} networksetup -listnetworkserviceorder | grep -B 1 "$WIFI_DEV" | head -n 1 | cut -d' ' -f2-)
-fi
+WIFI_SERVICE=$(networksetup -listallnetworkservices 2>/dev/null | grep -E "Wi-Fi|Wi-Fi 1|Wi-Fi 2" | head -n 1)
+
+# 활성화된 유선 이더넷 서비스 찾기
+ETHER_SERVICE=""
+ETHER_SERVICES=$(networksetup -listallnetworkservices 2>/dev/null | grep -E "Ethernet|LAN|Thunderbolt|USB")
+for service in $ETHER_SERVICES; do
+    dev=$(networksetup -listallhardwareports 2>/dev/null | xargs -I {} networksetup -listnetworkserviceorder | grep -A 1 "$service" | grep "Device:" | awk '{print $2}')
+    if [ ! -z "$dev" ] && ifconfig "$dev" 2>/dev/null | grep -q "status: active"; then
+        ETHER_SERVICE="$service"
+        ETHER_DEV="$dev"
+        break
+    fi
+done
 
 # 3. 사용자 선택 메뉴 출력
 echo " 📊 측정할 네트워크 장치를 선택해 주세요."
@@ -34,43 +39,33 @@ echo "------------------------------------------------------------"
 
 case "$CHOICE" in
     1)
-        if [ -z "$ETHER_SERVICE" ]; then
-            echo " ❌ 오류: 시스템에서 유선 이더넷(LAN) 서비스를 찾을 수 없습니다."
+        if [ -z "$ETHER_SERVICE" ] || [ -z "$ETHER_DEV" ]; then
+            echo " ❌ 오류: 유선 이더넷 랜선이 뽑혀있거나 장치가 활성화되어 있지 않습니다."
             echo "============================================================"
             exit 1
         fi
         
-        # 현재 유선 회선 상태 체크
-        ETHER_DEV=$(networksetup -listallhardwareports 2>/dev/null | xargs -I {} networksetup -listnetworkserviceorder | grep -A 1 "$ETHER_SERVICE" | grep "Device:" | awk '{print $2}')
-        if [ -z "$ETHER_DEV" ] || ! ifconfig "$ETHER_DEV" 2>/dev/null | grep -q "status: active"; then
-            echo " ❌ 오류: 유선 이더넷 랜선이 뽑혀있거나 장치가 비활성화 상태입니다."
-            echo "============================================================"
-            exit 1
-        fi
+        echo " ⏳ 유선 이더넷 ($ETHER_DEV) 속도 측정 중..."
         
-        echo " ⏳ 유선 이더넷 속도 측정 중... (비밀번호 입력 없음)"
-        # 안전장치: 와이파이를 잠시 끄고 측정한 뒤 복원하는 방식으로 라우팅 꼬임 원천 차단
+        # 와이파이가 켜져 있다면 잠시 끄기 (라우팅 충돌 방지)
         WIFI_WAS_ON=0
-        if [ ! -z "$WIFI_SERVICE" ] && networksetup -getgetwebproxy "$WIFI_SERVICE" &>/dev/null; then
-            # 와이파이 전원 상태 체크 후 끄기
-            if networksetup -getairportpower "$WIFI_DEV" 2>/dev/null | grep -q "On"; then
-                WIFI_WAS_ON=1
-                networksetup -setairportpower "$WIFI_DEV" off 2>/dev/null
-            fi
+        if [ ! -z "$WIFI_DEV" ] && networksetup -getairportpower "$WIFI_DEV" 2>/dev/null | grep -q "On"; then
+            WIFI_WAS_ON=1
+            networksetup -setairportpower "$WIFI_DEV" off &>/dev/null
         fi
         
         RESULT=$(speedtest-cli --simple 2>/dev/null)
         
         # 원복
         if [ "$WIFI_WAS_ON" -eq 1 ]; then
-            networksetup -setairportpower "$WIFI_DEV" on 2>/dev/null
+            networksetup -setairportpower "$WIFI_DEV" on &>/dev/null
         fi
         TARGET_NAME="유선 이더넷 (LAN)"
         ;;
         
     2)
         if [ -z "$WIFI_SERVICE" ] || [ -z "$WIFI_DEV" ]; then
-            echo " ❌ 오류: 시스템에서 무선 와이파이(Wi-Fi) 서비스를 찾을 수 없습니다."
+            echo " ❌ 오류: 시스템에서 무선 와이파이(Wi-Fi) 장치를 찾을 수 없습니다."
             echo "============================================================"
             exit 1
         fi
@@ -81,19 +76,23 @@ case "$CHOICE" in
             exit 1
         fi
         
-        echo " ⏳ 무선 와이파이 ($WIFI_DEV) 속도 측정 중... (비밀번호 입력 없음)"
+        echo " ⏳ 무선 와이파이 ($WIFI_DEV) 속도 측정 중..."
         
-        # 안전장치: 네트워크 서비스 우선순위를 조정하여 Wi-Fi를 1순위로 올린 뒤 측정
-        # sudo 없이 무점검 순위 조절이 가능한 맥 고유 메커니즘 활용
+        # [핵심 패치] 유선 이더넷이 연결되어 있다면 잠시 비활성화하여 와이파이 경로를 강제 독점합니다.
+        ETHER_WAS_ACTIVE=0
         if [ ! -z "$ETHER_SERVICE" ]; then
-            networksetup -setnetworkserviceorder "$WIFI_SERVICE" "$ETHER_SERVICE" &>/dev/null
+            ETHER_WAS_ACTIVE=1
+            # sudo 없이 특정 네트워크 서비스를 잠시 내리는 맥 전용 명령어
+            networksetup -setnetworkserviceenabled "$ETHER_SERVICE" off &>/dev/null
+            # 잠시 라우팅이 새로고침될 수 있도록 1초 대기
+            sleep 1
         fi
         
         RESULT=$(speedtest-cli --simple 2>/dev/null)
         
-        # 측정 후 원래 우선순위로 안전 원복 (이더넷이 먼저 오도록 기본 세팅 복구)
-        if [ ! -z "$ETHER_SERVICE" ]; then
-            networksetup -setnetworkserviceorder "$ETHER_SERVICE" "$WIFI_SERVICE" &>/dev/null
+        # [핵심 원복] 측정이 끝나면 유선 이더넷 서비스를 즉시 다시 활성화합니다.
+        if [ "$ETHER_WAS_ACTIVE" -eq 1 ]; then
+            networksetup -setnetworkserviceenabled "$ETHER_SERVICE" on &>/dev/null
         fi
         TARGET_NAME="무선 와이파이 (Wi-Fi)"
         ;;
@@ -109,7 +108,7 @@ esac
 echo "------------------------------------------------------------"
 if [ -z "$RESULT" ]; then
     echo " ❌ 측정 실패: 네트워크 응답이 없거나 테스트 서버에 연결할 수 없습니다."
-    echo " 💡 팁: 실제 인터넷 서핑이 잘 되는 상태인지 브라우저를 확인해 보세요."
+    echo " 💡 팁: 현재 선택한 회선으로 실제 인터넷 서핑이 가능한 상태인지 확인해 보세요."
 else
     PING=$(echo "$RESULT" | awk '/Ping:/ {print $2 " " $3}')
     DL=$(echo "$RESULT" | awk '/Download:/ {print $2 " Mbps"}')
