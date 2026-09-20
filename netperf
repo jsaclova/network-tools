@@ -57,9 +57,8 @@ echo " 🔍 현재 네트워크($SUBNET)에서 살아있는 장비 탐색 중...
 echo "    (소켓 보호를 위해 안전 모드로 검색합니다)"
 echo "------------------------------------------------------------"
 
-# [핵심 패치] iperf3 서버를 자극하는 -p 5201 포트 스캔을 완전히 제거합니다.
-# 오직 순수 Ping 스캔(-sn)으로 현재 살아있는 장비 리스트만 안전하게 확보합니다.
-ALIVE_HOSTS=$(nmap -sn "$SUBNET" | grep "Nmap scan report for" | awk '{print $NF}' | tr -d '()' | grep -v "^$MY_IP$")
+# [패치] 맥 OS 환경 특성을 고려하여 --system-dns 옵션을 추가하고 resolv.conf 관련 모든 경고 문구(2>/dev/null)를 숨깁니다.
+ALIVE_HOSTS=$(nmap -sn "$SUBNET" --system-dns 2>/dev/null | grep "Nmap scan report for" | awk '{print $NF}' | tr -d '()' | grep -v "^$MY_IP$")
 
 if [ -z "$ALIVE_HOSTS" ]; then
     echo " ⚪️ 안내: 현재 네트워크에 연결된 다른 장비를 찾지 못했습니다."
@@ -72,19 +71,14 @@ echo "------------------------------------------------------------"
 printf "  %-16s | %-16s | %-16s\n" "대상 장비 IP" "업로드(Sender)" "다운로드(Receiver)"
 echo "------------------------------------------------------------"
 
-# 활성 기기들에게만 다이렉트로 iperf3 연결을 시도합니다.
 echo "$ALIVE_HOSTS" | while read -r target; do
-    # 서버 미구동 장비에서 오래 멈추지 않도록 타임아웃은 2초로 안전하게 고정합니다.
     RAW_RESULT=$(iperf3 -c "$target" -t 3 -f m --connect-timeout 2 2>&1)
     
-    # iperf3 서버가 꺼져있거나 방화벽이 막힌 장비는 표 레이아웃을 깨지 않고 '대기중 아님'으로 매끄럽게 통과합니다.
     if echo "$RAW_RESULT" | grep -q -E "error|unable|timeout|Socket|not connected|refused"; then
-        # 타 기기들이 켜져있을 때 출력 노이즈를 줄이기 위해, 서버가 확실히 응답한 타임아웃/소켓 에러 외에 단순 거부(refused)는 조용히 넘어가거나 라인을 맞춥니다.
         if echo "$RAW_RESULT" | grep -q -E "Socket|not connected|timeout"; then
             printf "  %-16s | %-37s\n" "$target" "❌ 연결 실패 (소켓/타임아웃)"
         fi
     else
-        # 정상 연결 성공 시 데이터 파싱
         SENDER=$(echo "$RAW_RESULT" | grep "sender" | awk '{for(i=1;i<=NF;i++) if($i=="Mbits/sec") print $(i-1) " Mbps"}')
         RECEIVER=$(echo "$RAW_RESULT" | grep "receiver" | awk '/receiver/ {for(i=1;i<=NF;i++) if($i=="Mbits/sec") print $(i-1) " Mbps"}')
         
