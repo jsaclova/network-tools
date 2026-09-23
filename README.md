@@ -22,7 +22,6 @@ echo 'export PATH="$HOME/bin/network-tools:$PATH"' >> ~/.zshrc
 echo "alias netman='cat ~/bin/network-tools/manual | less -R'" >> ~/.zshrc
 chmod +x ~/bin/network-tools/*
 ```
-
 > ⚠️ **설치 후 필수 완료 명령어**: `source ~/.zshrc`
 
 ---
